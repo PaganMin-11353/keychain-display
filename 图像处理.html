@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arduino图像处理器 - OLED屏幕调试版 (128x32)</title>
+  <!-- Load React -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <!-- Load Babel for JSX support -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.21.2/babel.min.js"></script>
+  <!-- Tailwind CSS for styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    canvas {
+      image-rendering: pixelated;
+    }
+    .monospace {
+      font-family: monospace;
+    }
+    .simulator-pixel {
+      width: 2px;
+      height: 2px;
+      margin: 0;
+      padding: 0;
+      display: inline-block;
+    }
+    .simulator-row {
+      height: 2px;
+      margin: 0;
+      padding: 0;
+      white-space: nowrap;
+    }
+    .simulator-container {
+      border: 1px solid #333;
+      background-color: #000;
+      padding: 0;
+      overflow: hidden;
+      width: 256px;
+      height: 64px;
+    }
+  </style>
+</head>
+<body class="bg-gray-50">
+  <div id="root" class="container mx-auto p-4"></div>
+
+  <script type="text/babel">
+    // Arduino Image Processor Component
+    const ArduinoImageProcessor = () => {
+      const [inputImage, setInputImage] = React.useState(null);
+      const [processedImageData, setProcessedImageData] = React.useState(null);
+      const [processedMonoImageData, setProcessedMonoImageData] = React.useState(null);
+      const [hexArray, setHexArray] = React.useState('');
+      const [bitmapBytes, setBitmapBytes] = React.useState([]);
+      const [processingMode, setProcessingMode] = React.useState('resize'); // 'resize' or 'crop'
+      const [alignment, setAlignment] = React.useState('center'); // 'left', 'center', or 'right'
+      const [variableName, setVariableName] = React.useState('imageData');
+      const [invertColors, setInvertColors] = React.useState(false);
+      const [byteOrder, setByteOrder] = React.useState('vertical'); // 'horizontal' or 'vertical'
+      
+      const canvasRef = React.useRef(null);
+      const outputMonoCanvasRef = React.useRef(null);
+      
+      const handleImageUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const img = new Image();
+          img.onload = () => {
+            setInputImage(img);
+          };
+          img.src = event.target.result;
+        };
+        reader.readAsDataURL(file);
+      };
+      
+      React.useEffect(() => {
+        if (!inputImage) return;
+        
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        
+        // Set canvas dimensions to match the image
+        canvas.width = inputImage.width;
+        canvas.height = inputImage.height;
+        
+        // Draw the original image
+        ctx.drawImage(inputImage, 0, 0);
+        
+        processImage();
+      }, [inputImage, processingMode, alignment, invertColors, byteOrder]);
+      
+      React.useEffect(() => {
+        if (processedMonoImageData) {
+          generateBitmapArray();
+        }
+      }, [processedMonoImageData, invertColors, byteOrder, variableName]);
+      
+      const processImage = () => {
+        if (!inputImage) return;
+        
+        const MAX_WIDTH = 128;
+        const MAX_HEIGHT = 32;
+        
+        const outputMonoCanvas = outputMonoCanvasRef.current;
+        const outputMonoCtx = outputMonoCanvas.getContext('2d');
+        outputMonoCanvas.width = MAX_WIDTH;
+        outputMonoCanvas.height = MAX_HEIGHT;
+        outputMonoCtx.clearRect(0, 0, MAX_WIDTH, MAX_HEIGHT);
+        
+        // Calculate dimensions
+        let newWidth, newHeight, offsetX, offsetY;
+        
+        if (processingMode === 'resize') {
+          // Resize the image while maintaining aspect ratio
+          const aspectRatio = inputImage.width / inputImage.height;
+          newWidth = MAX_WIDTH;
+          newHeight = newWidth / aspectRatio;
+          
+          if (newHeight > MAX_HEIGHT) {
+            newHeight = MAX_HEIGHT;
+            newWidth = newHeight * aspectRatio;
+          }
+          
+          // Calculate offset based on alignment
+          if (alignment === 'left') {
+            offsetX = 0;
+          } else if (alignment === 'right') {
+            offsetX = MAX_WIDTH - newWidth;
+          } else { // center
+            offsetX = (MAX_WIDTH - newWidth) / 2;
+          }
+          
+          offsetY = (MAX_HEIGHT - newHeight) / 2; // Always center vertically
+          
+          // Draw to the canvas with a white background
+          outputMonoCtx.fillStyle = invertColors ? 'black' : 'white';
+          outputMonoCtx.fillRect(0, 0, MAX_WIDTH, MAX_HEIGHT);
+          outputMonoCtx.drawImage(inputImage, offsetX, offsetY, newWidth, newHeight);
+        } else { // crop
+          // Crop the image to fit the dimensions
+          const sourceAspect = inputImage.width / inputImage.height;
+          const targetAspect = MAX_WIDTH / MAX_HEIGHT;
+          
+          let sx, sy, sWidth, sHeight;
+          
+          if (sourceAspect > targetAspect) {
+            // Image is wider than target
+            sHeight = inputImage.height;
+            sWidth = inputImage.height * targetAspect;
+            
+            // Adjust horizontal crop position based on alignment
+            if (alignment === 'left') {
+              sx = 0;
+            } else if (alignment === 'right') {
+              sx = inputImage.width - sWidth;
+            } else { // center
+              sx = (inputImage.width - sWidth) / 2;
+            }
+            
+            sy = 0;
+          } else {
+            // Image is taller than target
+            sWidth = inputImage.width;
+            sHeight = inputImage.width / targetAspect;
+            sx = 0;
+            sy = (inputImage.height - sHeight) / 2; // Always center vertically
+          }
+          
+          // Draw to the canvas with a white background
+          outputMonoCtx.fillStyle = invertColors ? 'black' : 'white';
+          outputMonoCtx.fillRect(0, 0, MAX_WIDTH, MAX_HEIGHT);
+          outputMonoCtx.drawImage(inputImage, sx, sy, sWidth, sHeight, 0, 0, MAX_WIDTH, MAX_HEIGHT);
+        }
+        
+        // Convert to monochrome (1-bit per pixel)
+        const monoImageData = outputMonoCtx.getImageData(0, 0, MAX_WIDTH, MAX_HEIGHT);
+        const data = monoImageData.data;
+        
+        for (let i = 0; i < data.length; i += 4) {
+          // Calculate brightness (weighted RGB average)
+          const brightness = 0.34 * data[i] + 0.5 * data[i + 1] + 0.16 * data[i + 2];
+          // Apply threshold at 128
+          const bw = brightness > 128 ? 255 : 0;
+          // Apply color inversion if enabled
+          const finalColor = invertColors ? (255 - bw) : bw;
+          data[i] = data[i + 1] = data[i + 2] = finalColor;
+        }
+        
+        outputMonoCtx.putImageData(monoImageData, 0, 0);
+        setProcessedMonoImageData(monoImageData);
+      };
+      
+      const generateBitmapArray = () => {
+        if (!processedMonoImageData) return;
+        
+        const width = 128;
+        const height = 32;
+        const monoData = processedMonoImageData.data;
+        
+        let bytesArray = [];
+        let hexOutput = '';
+        
+        if (byteOrder === 'horizontal') {
+          // Horizontal byte order (standard approach)
+          // Each byte represents 8 consecutive horizontal pixels
+          
+          hexOutput = `const unsigned char PROGMEM ${variableName}[] = {\n`;
+          
+          for (let y = 0; y < height; y++) {
+            let rowBytes = [];
+            
+            // For a 128-pixel wide display, we need 16 bytes per row (128 / 8 = 16)
+            for (let byteIndex = 0; byteIndex < 16; byteIndex++) {
+              let byteValue = 0;
+              
+              // Each byte contains 8 horizontal pixels
+              for (let bit = 0; bit < 8; bit++) {
+                const x = byteIndex * 8 + bit;
+                const i = (y * width + x) * 4;
+                // In this case, white pixels (255) are "off" (0) and black pixels (0) are "on" (1)
+                // This is the convention for OLED displays
+                const isOn = monoData[i] === 0;
+                
+                // Set the appropriate bit (MSB first)
+                if (isOn) {
+                  byteValue |= (1 << (7 - bit));
+                }
+              }
+              
+              rowBytes.push(byteValue);
+            }
+            
+            bytesArray = bytesArray.concat(rowBytes);
+            
+            // Format row for display
+            const formattedRow = rowBytes.map(b => `0x${b.toString(16).padStart(2, '0')}`).join(', ');
+            hexOutput += `  ${formattedRow},\n`;
+          }
+        } else {
+          // Vertical byte order (SSD1306 page mode)
+          // Each byte represents 8 vertical pixels
+          
+          hexOutput = `const unsigned char PROGMEM ${variableName}[] = {\n`;
+          
+          // The display is divided into 4 pages (32 / 8 = 4)
+          for (let page = 0; page < 4; page++) {
+            let pageBytes = [];
+            
+            // Each page has 128 columns
+            for (let x = 0; x < width; x++) {
+              let byteValue = 0;
+              
+              // Each byte contains 8 vertical pixels
+              for (let bit = 0; bit < 8; bit++) {
+                const y = page * 8 + bit;
+                const i = (y * width + x) * 4;
+                // Check if the pixel is on (black)
+                const isOn = monoData[i] === 0;
+                
+                // Set the appropriate bit (LSB is top pixel in this case)
+                if (isOn) {
+                  byteValue |= (1 << bit);
+                }
+              }
+              
+              pageBytes.push(byteValue);
+            }
+            
+            bytesArray = bytesArray.concat(pageBytes);
+            
+            // Break the page into rows of 16 bytes for display
+            for (let row = 0; row < 8; row++) {
+              const startByte = row * 16;
+              const rowSlice = pageBytes.slice(startByte, startByte + 16);
+              const formattedRow = rowSlice.map(b => `0x${b.toString(16).padStart(2, '0')}`).join(', ');
+              hexOutput += `  ${formattedRow},\n`;
+            }
+          }
+        }
+        
+        hexOutput += '};';
+        setHexArray(hexOutput);
+        setBitmapBytes(bytesArray);
+      };
+      
+      const copyToClipboard = () => {
+        navigator.clipboard.writeText(hexArray).then(
+          () => {
+            alert("代码已复制到剪贴板！");
+          },
+          (err) => {
+            console.error("无法复制文本: ", err);
+          }
+        );
+      };
+      
+      const saveArduinoFile = () => {
+        const filename = `${variableName}.h`;
+        
+        // Create header guard and variable declaration
+        const headerContent = `#ifndef ${variableName.toUpperCase()}_H
+#define ${variableName.toUpperCase()}_H
+
+#include <avr/pgmspace.h>
+
+${hexArray}
+
+#endif // ${variableName.toUpperCase()}_H`;
+        
+        const blob = new Blob([headerContent], {type: 'text/plain'});
+        const a = document.createElement('a');
+        a.download = filename;
+        a.href = URL.createObjectURL(blob);
+        a.click();
+        URL.revokeObjectURL(a.href);
+      };
+      
+      // Simulate OLED display using the generated bitmap array
+      const SimulatedDisplay = () => {
+        if (!bitmapBytes.length) return null;
+        
+        // Create the display based on the byte order
+        let pixels = Array(32).fill().map(() => Array(128).fill(false));
+        
+        if (byteOrder === 'horizontal') {
+          // For horizontal byte order
+          for (let y = 0; y < 32; y++) {
+            for (let byteIndex = 0; byteIndex < 16; byteIndex++) {
+              const byteValue = bitmapBytes[y * 16 + byteIndex];
+              
+              for (let bit = 0; bit < 8; bit++) {
+                const x = byteIndex * 8 + bit;
+                const bitValue = (byteValue >> (7 - bit)) & 1;
+                pixels[y][x] = bitValue === 1;
+              }
+            }
+          }
+        } else {
+          // For vertical byte order
+          for (let page = 0; page < 4; page++) {
+            for (let x = 0; x < 128; x++) {
+              const byteValue = bitmapBytes[page * 128 + x];
+              
+              for (let bit = 0; bit < 8; bit++) {
+                const y = page * 8 + bit;
+                const bitValue = (byteValue >> bit) & 1;
+                pixels[y][x] = bitValue === 1;
+              }
+            }
+          }
+        }
+        
+        return (
+          <div className="mt-4">
+            <h3 className="font-semibold mb-2">模拟显示效果</h3>
+            <div className="simulator-container">
+              {pixels.map((row, y) => (
+                <div key={y} className="simulator-row">
+                  {row.map((isOn, x) => (
+                    <div
+                      key={`${y}-${x}`}
+                      className="simulator-pixel"
+                      style={{ backgroundColor: isOn ? '#FFFFFF' : '#000000' }}
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      };
+      
+      return (
+        <div className="flex flex-col p-4 max-w-4xl mx-auto bg-white shadow-lg rounded-lg">
+          <h1 className="text-2xl font-bold mb-4">Arduino OLED图像调试工具 (128x32)</h1>
+          
+          <div className="mb-4">
+            <label className="block mb-2">上传图像:</label>
+            <input 
+              type="file" 
+              accept="image/*" 
+              onChange={handleImageUpload}
+              className="border p-2 w-full rounded"
+            />
+          </div>
+          
+          <div className="mb-4 flex flex-wrap gap-4">
+            <div>
+              <label className="block mb-2">变量名称:</label>
+              <input 
+                type="text" 
+                value={variableName}
+                onChange={(e) => setVariableName(e.target.value)}
+                className="border p-2 rounded w-64"
+                placeholder="输入PROGMEM变量名"
+              />
+            </div>
+            
+            <div className="flex items-center">
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={invertColors}
+                  onChange={() => setInvertColors(!invertColors)}
+                  className="mr-2"
+                />
+                反转颜色 (黑底白图)
+              </label>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div>
+              <label className="block mb-2">处理模式:</label>
+              <div className="flex flex-col space-y-1">
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    value="resize"
+                    checked={processingMode === 'resize'}
+                    onChange={() => setProcessingMode('resize')}
+                    className="mr-2"
+                  />
+                  缩放（保持宽高比）
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    value="crop"
+                    checked={processingMode === 'crop'}
+                    onChange={() => setProcessingMode('crop')}
+                    className="mr-2"
+                  />
+                  裁剪
+                </label>
+              </div>
+            </div>
+            
+            <div>
+              <label className="block mb-2">对齐方式:</label>
+              <div className="flex flex-col space-y-1">
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    value="left"
+                    checked={alignment === 'left'}
+                    onChange={() => setAlignment('left')}
+                    className="mr-2"
+                  />
+                  左对齐
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    value="center"
+                    checked={alignment === 'center'}
+                    onChange={() => setAlignment('center')}
+                    className="mr-2"
+                  />
+                  居中
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    value="right"
+                    checked={alignment === 'right'}
+                    onChange={() => setAlignment('right')}
+                    className="mr-2"
+                  />
+                  右对齐
+                </label>
+              </div>
+            </div>
+            
+            <div>
+              <label className="block mb-2">字节排序:</label>
+              <div className="flex flex-col space-y-1">
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    value="horizontal"
+                    checked={byteOrder === 'horizontal'}
+                    onChange={() => setByteOrder('horizontal')}
+                    className="mr-2"
+                  />
+                  水平排序 (标准)
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    value="vertical"
+                    checked={byteOrder === 'vertical'}
+                    onChange={() => setByteOrder('vertical')}
+                    className="mr-2"
+                  />
+                  垂直排序 (页模式)
+                </label>
+              </div>
+            </div>
+          </div>
+          
+          <div className="flex flex-wrap mb-4">
+            <div className="w-full md:w-1/2 p-2">
+              <h2 className="text-lg font-semibold mb-2">输入图像</h2>
+              <div className="border p-2 bg-gray-100 rounded">
+                <canvas
+                  ref={canvasRef}
+                  className="max-w-full border"
+                  style={{ display: inputImage ? 'block' : 'none' }}
+                />
+                {!inputImage && <p className="text-gray-500 p-4">未上传图像</p>}
+              </div>
+              <p className="text-sm mt-1">
+                {inputImage && `原始尺寸: ${inputImage.width}×${inputImage.height}像素`}
+              </p>
+            </div>
+            
+            <div className="w-full md:w-1/2 p-2">
+              <h2 className="text-lg font-semibold mb-2">处理后的图像</h2>
+              <div className="border p-2 bg-gray-100 rounded">
+                <canvas
+                  ref={outputMonoCanvasRef}
+                  width="128"
+                  height="32"
+                  className="max-w-full border"
+                  style={{ 
+                    display: inputImage ? 'block' : 'none',
+                    imageRendering: 'pixelated',
+                    width: '100%',
+                    height: 'auto',
+                    maxHeight: '200px',
+                    objectFit: 'contain'
+                  }}
+                />
+                {!inputImage && <p className="text-gray-500 p-4">处理图像以查看输出</p>}
+              </div>
+              <p className="text-sm mt-1">输出尺寸: 128×32像素，1位色深</p>
+            </div>
+          </div>
+          
+          {processedMonoImageData && <SimulatedDisplay />}
+          
+          {processedMonoImageData && (
+            <div className="mb-4 mt-4">
+              <h2 className="text-lg font-semibold mb-2">Arduino PROGMEM 代码</h2>
+              <div className="flex space-x-4 mb-2">
+                <button
+                  className="bg-blue-500 text-white px-4 py-1 rounded hover:bg-blue-600"
+                  onClick={copyToClipboard}
+                >
+                  复制到剪贴板
+                </button>
+                <button
+                  className="bg-green-500 text-white px-4 py-1 rounded hover:bg-green-600"
+                  onClick={saveArduinoFile}
+                >
+                  保存为头文件
+                </button>
+              </div>
+              
+              <div className="border bg-gray-800 text-green-400 p-4 overflow-auto max-h-96 text-sm monospace rounded">
+                <pre>{hexArray}</pre>
+              </div>
+              
+              <p className="text-sm mt-2">
+                • 水平字节顺序: 每行16字节，每字节表示8个水平相邻像素<br />
+                • 垂直字节顺序: 每列32像素被分为4页，每页1字节表示8个垂直相邻像素
+              </p>
+            </div>
+          )}
+          
+          <div className="text-sm text-gray-600 mt-4 p-4 bg-gray-100 rounded">
+            <h3 className="font-semibold">调试提示:</h3>
+            <ul className="list-disc ml-5 space-y-1">
+              <li>如果模拟器中的显示与您的实际屏幕不一致，尝试切换<b>反转颜色</b>选项</li>
+              <li>如果图像显示颠倒或错位，尝试切换<b>字节排序</b>选项</li>
+              <li>大多数SSD1306 OLED驱动使用垂直字节顺序（页模式），而水平字节顺序更适合其他类型的显示</li>
+              <li>确保使用drawBitmap函数的正确参数: <code>display.drawBitmap(0, 0, imageData, 128, 32, 1);</code></li>
+              <li>在Arduino代码中，可能需要使用<code>WHITE</code>或<code>BLACK</code>调整显示效果</li>
+            </ul>
+            <div className="bg-gray-800 text-green-400 p-3 mt-2 rounded monospace text-xs">
+              <pre>{`// 在Arduino代码中
+#include "images.h"
+
+void setup() {
+  // 初始化显示屏
+  display.begin();
+  
+  // 绘制图像
+  display.clearDisplay();
+  display.drawBitmap(0, 0, ${variableName}, 128, 32, WHITE); // 使用WHITE或BLACK根据需要调整
+  display.display();
+}`}</pre>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // Render the application
+    const rootElement = document.getElementById('root');
+    ReactDOM.render(<ArduinoImageProcessor />, rootElement);
+  </script>
+</body>
+</html>
