@@ -183,3 +183,10 @@ desktop.ini
 .Spotlight-V100
 .Trashes
 ._*
+
+# PlatformIO
+.pioenvs
+.piolibdeps
+.clang_complete
+.gcc-flags.json
+.pio
